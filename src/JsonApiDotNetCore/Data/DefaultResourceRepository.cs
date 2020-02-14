@@ -15,15 +15,20 @@ using Microsoft.Extensions.Logging;
 
 namespace JsonApiDotNetCore.Data
 {
+
+    //public class DefaultResourceRepository<TResource, TId> : IResourceRepository<TResource, TId>
+    //where TResource : class, IIdentifiable<TId>
+
     /// <summary>
     /// Provides a default repository implementation and is responsible for
     /// abstracting any EF Core APIs away from the service layer.
     /// </summary>
-    public class DefaultResourceRepository<TResource, TId> : IResourceRepository<TResource, TId>
+    public class DefaultResourceRepository<TResource, TId, TContext> : IResourceRepository<TResource, TId>
         where TResource : class, IIdentifiable<TId>
+        where TContext : DbContext
     {
         private readonly ITargetedFields _targetedFields;
-        private readonly DbContext _context;
+        protected readonly TContext _context;
         private readonly DbSet<TResource> _dbSet;
         private readonly IResourceGraph _resourceGraph;
         private readonly IGenericServiceFactory _genericServiceFactory;
@@ -39,7 +44,7 @@ namespace JsonApiDotNetCore.Data
             _targetedFields = targetedFields;
             _resourceGraph = resourceGraph;
             _genericServiceFactory = genericServiceFactory;
-            _context = contextResolver.GetContext();
+            _context = contextResolver.GetContext() as TContext;
             _dbSet = _context.Set<TResource>();
             _logger = loggerFactory.CreateLogger<DefaultResourceRepository<TResource, TId>>();
 
@@ -93,6 +98,7 @@ namespace JsonApiDotNetCore.Data
                     relationshipAttr.SetValue(entity, trackedRelationshipValue);
             }
             _dbSet.Add(entity);
+            await BeforeSaveCreateAsync(entity);
             await _context.SaveChangesAsync();
 
             // this ensures relationships get reloaded from the database if they have
@@ -101,6 +107,7 @@ namespace JsonApiDotNetCore.Data
 
             return entity;
         }
+        protected virtual Task BeforeSaveCreateAsync(TResource entity) => Task.CompletedTask;
 
         /// <summary>
         /// Loads the inverse relationships to prevent foreign key constraints from being violated
@@ -201,10 +208,11 @@ namespace JsonApiDotNetCore.Data
                 //AssignRelationshipValue(databaseEntity, trackedRelationshipValue, relationshipAttr);
                 relationshipAttr.SetValue(databaseEntity, trackedRelationshipValue);
             }
-
+            await BeforeSaveUpdateAsync(databaseEntity);
             await _context.SaveChangesAsync();
             return databaseEntity;
         }
+        protected virtual Task BeforeSaveUpdateAsync(TResource databaseEntity) => Task.CompletedTask;
 
         /// <summary>
         /// Responsible for getting the relationship value for a given relationship 
@@ -265,9 +273,10 @@ namespace JsonApiDotNetCore.Data
 
             var helper = _genericServiceFactory.Get<IRepositoryRelationshipUpdateHelper>(typeof(RepositoryRelationshipUpdateHelper<>), typeToUpdate);
             await helper.UpdateRelationshipAsync((IIdentifiable)parent, relationship, relationshipIds);
-
+            await BeforeSaveUpdateRelationshipsAsync(parent, relationship, relationshipIds);
             await _context.SaveChangesAsync();
         }
+        protected virtual Task BeforeSaveUpdateRelationshipsAsync(object parent, RelationshipAttribute relationship, IEnumerable<string> relationshipIds) => Task.CompletedTask;
 
         /// <inheritdoc />
         public virtual async Task<bool> DeleteAsync(TId id)
@@ -276,9 +285,10 @@ namespace JsonApiDotNetCore.Data
             if (entity == null) return false;
             _dbSet.Remove(entity);
             await _context.SaveChangesAsync();
+            await BeforeDeleteAsync(entity);
             return true;
         }
-
+        protected virtual Task BeforeDeleteAsync(TResource entity) => Task.CompletedTask;
         public virtual IQueryable<TResource> Include(IQueryable<TResource> entities, IEnumerable<RelationshipAttribute> inclusionChain = null)
         {
             if (inclusionChain == null || !inclusionChain.Any())
@@ -404,6 +414,16 @@ namespace JsonApiDotNetCore.Data
             // this entity were updated.
             _context.Entry(relationshipValue).State = EntityState.Unchanged;
             return null;
+        }
+    }
+    /// <inheritdoc />
+    public class DefaultResourceRepository<TResource, TId> : DefaultResourceRepository<TResource, TId, DbContext>, IResourceRepository<TResource, TId>
+    where TResource : class, IIdentifiable<TId>
+    {
+
+
+        public DefaultResourceRepository(ITargetedFields targetedFields, IDbContextResolver contextResolver, IResourceGraph resourceGraph, IGenericServiceFactory genericServiceFactory, ILoggerFactory loggerFactory = null) : base(targetedFields, contextResolver, resourceGraph, genericServiceFactory, loggerFactory)
+        {
         }
     }
 
